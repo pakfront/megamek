@@ -3245,24 +3245,37 @@ public class Server implements Runnable {
         transmitAllPlayerUpdates();
     }
 
-    private Vector<GameTurn> checkTurnOrderStranded(TurnVectors team_order) {
+    private Vector<GameTurn> checkTurnOrderStrandedAndHidden(TurnVectors team_order) {
+        GamePhase phase = game.getPhase();
         Vector<GameTurn> turns = new Vector<>(team_order.getTotalTurns()
                 + team_order.getEvenTurns());
         // Stranded units only during movement phases, rebuild the turns vector
-        if (game.getPhase() == GamePhase.MOVEMENT) {
+        if (phase == GamePhase.MOVEMENT) {
+
             // See if there are any loaded units stranded on immobile transports.
-            Iterator<Entity> strandedUnits = game.getSelectedEntities(
-                    entity -> game.isEntityStranded(entity));
+            Iterator<Entity> strandedUnits = game.getSelectedEntities(entity -> game.isEntityStranded(entity));
             if (strandedUnits.hasNext()) {
+                // Add a game turn to unload stranded units, if this
+                // is the movement phase.
+                turns = new Vector<>(team_order.getTotalTurns() + team_order.getEvenTurns() + 1);
+                turns.addElement(new GameTurn.UnloadStrandedTurn(strandedUnits));
+            }
+        }
+            if (phase == GamePhase.MOVEMENT || phase == GamePhase.FIRING) {
+            // See if there are any hidden units.
+            Iterator<Entity> hiddenUnits = game.getSelectedEntities(
+                    entity -> entity.isHidden());
+            if (hiddenUnits.hasNext()) {
                 // Add a game turn to unload stranded units, if this
                 // is the movement phase.
                 turns = new Vector<>(team_order.getTotalTurns()
                         + team_order.getEvenTurns() + 1);
-                turns.addElement(new GameTurn.UnloadStrandedTurn(strandedUnits));
+                turns.addElement(new GameTurn.UnhideHiddenTurn(hiddenUnits));
             }
         }
         return turns;
     }
+
 
     /**
      * Determines the turn oder for a given phase (with individual init)
@@ -3310,7 +3323,7 @@ public class Server implements Runnable {
         TurnVectors team_order = TurnOrdered.generateTurnOrder(entities, game);
 
         // Now, we collect everything into a single vector.
-        Vector<GameTurn> turns = checkTurnOrderStranded(team_order);
+        Vector<GameTurn> turns = checkTurnOrderStrandedAndHidden(team_order);
 
         // add the turns (this is easy)
         while (team_order.hasMoreElements()) {
@@ -3488,6 +3501,7 @@ public class Server implements Runnable {
                     player.incrementOtherTurns();
                 }
             }
+
         }
 
         // Generate the turn order for the Players *within*
@@ -3516,7 +3530,7 @@ public class Server implements Runnable {
         TurnVectors team_order = TurnOrdered.generateTurnOrder(game.getTeamsVector(), game);
 
         // Now, we collect everything into a single vector.
-        Vector<GameTurn> turns = checkTurnOrderStranded(team_order);
+        Vector<GameTurn> turns = checkTurnOrderStrandedAndHidden(team_order);
 
         // Walk through the global order, assigning turns
         // for individual players to the single vector.
@@ -31279,6 +31293,10 @@ public class Server implements Runnable {
             case Packet.COMMAND_UNLOAD_STRANDED:
                 receiveUnloadStranded(packet, connId);
                 break;
+
+            case Packet.COMMAND_UNHIDE_HIDDEN:
+                receiveUnhideHidden(packet, connId);
+                break;
             case Packet.COMMAND_SET_ARTILLERY_AUTOHIT_HEXES:
                 receiveArtyAutoHitHexes(packet, connId);
                 break;
@@ -32854,14 +32872,141 @@ public class Server implements Runnable {
         changeToNextTurn(connId);
     }
 
-    /**
-     * For all current artillery attacks in the air from this entity with this
-     * weapon, clear the list of spotters. Needed because firing another round
-     * before first lands voids spotting.
-     *
-     * @param entityID the <code>int</code> id of the entity
-     * @param weaponID the <code>int</code> id of the weapon
-     */
+    private void receiveUnhideHidden(Packet packet, int connId) {
+        GameTurn.UnhideHiddenTurn turn;
+        final Player player = game.getPlayer(connId);
+        int[] entityIds = (int[]) packet.getObject(0);
+        Vector<Player> declared;
+        Player other;
+        Enumeration<EntityAction> pending;
+        UnhideHiddenAction action;
+        Entity entity;
+
+        // Is this the right phase?
+        if (game.getPhase() != GamePhase.MOVEMENT && game.getPhase() != GamePhase.FIRING) {
+            LogManager.getLogger().error("Server got receiveUnhideHidden packet in wrong phase");
+            return;
+        }
+
+        // Are we in an "unload stranded entities" turn?
+        if (game.getTurn() instanceof GameTurn.UnhideHiddenTurn) {
+            turn = (GameTurn.UnhideHiddenTurn) game.getTurn();
+        } else {
+            LogManager.getLogger().error("Server got UnhideHiddenTurn packet out of sequence");
+            sendServerChat(player.getName() + " should not be sending 'UnhideHiddenTurn' packets at this time.");
+            return;
+        }
+
+        // Can this player act right now?
+        if (!turn.isValid(connId, game)) {
+            LogManager.getLogger().error("Server got unload stranded packet from invalid player");
+            sendServerChat(player.getName() + " should not be sending 'UnhideHiddenTurn' packets.");
+            return;
+        }
+
+        // Did the player already send an 'unload' request?
+        // N.B. we're also building the list of players who
+        // have declared their "unload stranded" actions.
+        declared = new Vector<>();
+        pending = game.getActions();
+        while (pending.hasMoreElements()) {
+            action = (UnhideHiddenAction) pending.nextElement();
+            if (action.getPlayerId() == connId) {
+                LogManager.getLogger().error("Server got multiple UnhideHiddenTurn packets from player");
+                sendServerChat(player.getName() + " should not send multiple 'UnhideHiddenTurn' packets.");
+                return;
+            }
+            // This player is not from the current connection.
+            // Record this player to determine if this turn is done.
+            other = game.getPlayer(action.getPlayerId());
+            if (!declared.contains(other)) {
+                declared.addElement(other);
+            }
+        } // Handle the next "unload stranded" action.
+
+        // Make sure the player selected at least *one* valid entity ID.
+        boolean foundValid = false;
+        for (int index = 0; (null != entityIds) && (index < entityIds.length); index++) {
+            entity = game.getEntity(entityIds[index]);
+            if (!game.getTurn().isValid(connId, entity, game)) {
+                LogManager.getLogger().error("Server got UnhideHiddenTurn packet for invalid entity");
+                StringBuilder message = new StringBuilder();
+                message.append(player.getName()).append(" can not UnhideHiddenTurn entity ");
+                if (null == entity) {
+                    message.append('#').append(entityIds[index]);
+                } else {
+                    message.append(entity.getDisplayName());
+                }
+                message.append(" at this time.");
+                sendServerChat(message.toString());
+            } else {
+                foundValid = true;
+                game.addAction(new UnhideHiddenAction(connId, entityIds[index]));
+            }
+        }
+
+        // Did the player choose not to unload any valid stranded entity?
+        if (!foundValid) {
+            game.addAction(new UnhideHiddenAction(connId, Entity.NONE));
+        }
+
+        // Either way, the connection's player has now declared.
+        declared.addElement(player);
+
+        // Are all players who are unhiding entities done? Walk
+        // through the turn's hidden entities, and look to see
+        // if their player has finished their turn.
+        entityIds = turn.getEntityIds();
+        for (int entityId : entityIds) {
+            entity = game.getEntity(entityId);
+            other = entity.getOwner();
+            if (!declared.contains(other)) {
+                // At least one player still needs to declare.
+                return;
+            }
+        }
+
+        // All players have declared whether they're unhiding stranded units.
+        // Walk the list of pending actions and unhide the entities.
+        pending = game.getActions();
+        while (pending.hasMoreElements()) {
+            action = (UnhideHiddenAction) pending.nextElement();
+
+            // Some players don't want to unload any stranded units.
+            if (Entity.NONE != action.getEntityId()) {
+                entity = game.getEntity(action.getEntityId());
+                if (null == entity) {
+                    // After all this, we couldn't find the entity!!!
+                    LogManager.getLogger().error("Server could not find hidden entity #"
+                            + action.getEntityId() + " to unhide!!!");
+                } else {
+                    //TODO probably should use the unhide phase settings since just unhidden cannot move
+
+                    //TODO add unhien to initiative list or remove still hidden from init list
+                    LogManager.getLogger().info("Unhiding "+action.getEntityId());
+                    entity.setHidden(false);
+//                    // Unload the entity. Get the unit's transporter.
+//                    Entity transporter = game
+//                            .getEntity(entity.getTransportId());
+//                    unloadUnit(transporter, entity, transporter.getPosition(),
+//                            transporter.getFacing(), transporter.getElevation());
+                }
+            }
+
+        } // Handle the next pending unload action
+
+        // Clear the list of pending units and move to the next turn.
+        game.resetActions();
+        changeToNextTurn(connId);
+    }
+        /**
+         * For all current artillery attacks in the air from this entity with this
+         * weapon, clear the list of spotters. Needed because firing another round
+         * before first lands voids spotting.
+         *
+         * @param entityID the <code>int</code> id of the entity
+         * @param weaponID the <code>int</code> id of the weapon
+         */
     private void clearArtillerySpotters(int entityID, int weaponID) {
         for (Enumeration<AttackHandler> i = game.getAttacks(); i.hasMoreElements(); ) {
             WeaponHandler wh = (WeaponHandler) i.nextElement();

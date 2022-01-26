@@ -514,6 +514,23 @@ public class Client implements IClientCommandHandler {
     }
 
     /**
+     * Can I unhide entities?
+     */
+    public boolean canUnhideHidden() {
+        return (game.getTurn() instanceof GameTurn.UnhideHiddenTurn)
+                && game.getTurn().isValid(localPlayerNumber, game);
+    }
+
+    /**
+     * Send command to unhide hidden entities to the server
+     */
+    public void sendUnhideHidden(int[] entityIds) {
+        Object[] data = new Object[1];
+        data[0] = entityIds;
+        send(new Packet(Packet.COMMAND_UNHIDE_HIDDEN, data));
+    }
+
+    /**
      * Change whose turn it is.
      */
     protected void changeTurnIndex(int index, int prevPlayerId) {

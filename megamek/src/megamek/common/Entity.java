@@ -9775,11 +9775,11 @@ public abstract class Entity extends TurnOrdered implements Transporter, Targeta
             return false;
         }
 
-        // Hidden units shouldn't be counted for turn order, unless deploying
-        if (isHidden() && phase != GamePhase.DEPLOYMENT
-                && phase != GamePhase.FIRING) {
-            return false;
-        }
+//        // Hidden units shouldn't be counted for turn order, unless deploying
+//        if (isHidden() && phase != GamePhase.DEPLOYMENT
+//                && phase != GamePhase.FIRING) {
+//            return false;
+//        }
 
         switch (phase) {
             case MOVEMENT:

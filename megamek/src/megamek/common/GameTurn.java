@@ -34,7 +34,7 @@ public class GameTurn implements Serializable {
     private static final long serialVersionUID = -8340385894504735190L;
 
     private int playerId;
-    
+
     /**
      * Various optionals rules force certain unit types to move multiple units
      * for one turn, such as mek and vehicle lance rules; this flag keeps track
@@ -66,14 +66,14 @@ public class GameTurn implements Serializable {
     public boolean isValidEntity(Entity entity, Game game) {
         return isValidEntity(entity, game, true);
     }
-    
+
     /**
      * Determine if the specified entity is a valid one to use for this turn.
      * In addition to the "standard" validity checks, there is also a check 
      * for the optional rules "infantry move later" and "protos move later."
      * This checks to see if those options are enabled and if there is a valid
      * non-infantry (or proto) unit to move and if so, the entity is invalid.
-     * 
+     *
      * There are certain instances where this check should not be used when
      * the optional rules are enabled (such as loading infantry into a unit).
      * Hence, the use of these additional checks is specified by a boolean input
@@ -94,7 +94,7 @@ public class GameTurn implements Serializable {
                 && (((entity instanceof Infantry) && game.getOptions().booleanOption(OptionsConstants.INIT_INF_MOVE_LATER))
                 || ((entity instanceof Protomech) && game.getOptions().booleanOption(OptionsConstants.INIT_PROTOS_MOVE_LATER)))
                 && game.checkForValidNonInfantryAndOrProtomechs(playerId));
-    }    
+    }
 
     /**
      * Returns true if the player and entity are both valid.
@@ -117,7 +117,7 @@ public class GameTurn implements Serializable {
     @Override
     public String toString() {
         String className = getClass().getName();
-        return className.substring(className.lastIndexOf('.')+1) + 
+        return className.substring(className.lastIndexOf('.')+1) +
                 " pid: " + playerId;
     }
 
@@ -150,7 +150,7 @@ public class GameTurn implements Serializable {
          */
         @Override
         public boolean isValidEntity(Entity entity, Game game,
-                boolean useValidNonInfantryCheck) {
+                                     boolean useValidNonInfantryCheck) {
             return super.isValidEntity(entity, game, useValidNonInfantryCheck)
                     && (entity.getId() == entityId);
         }
@@ -182,10 +182,10 @@ public class GameTurn implements Serializable {
          */
         @Override
         public boolean isValidEntity(Entity entity, Game game,
-                boolean useValidNonInfantryCheck) {
+                                     boolean useValidNonInfantryCheck) {
             final boolean oldDone = entity.done;
             entity.done = false;
-            final boolean result = 
+            final boolean result =
                     super.isValidEntity(entity, game, useValidNonInfantryCheck);
             entity.done = oldDone;
             return result;
@@ -219,11 +219,11 @@ public class GameTurn implements Serializable {
          */
         @Override
         public boolean isValidEntity(Entity entity, Game game,
-                boolean useValidNonInfantryCheck) {
+                                     boolean useValidNonInfantryCheck) {
             final boolean oldDone = entity.done;
 
             entity.done = false;
-            final boolean result = 
+            final boolean result =
                     super.isValidEntity(entity, game, useValidNonInfantryCheck);
             entity.done = oldDone;
             return result;
@@ -251,10 +251,10 @@ public class GameTurn implements Serializable {
          */
         @Override
         public boolean isValidEntity(Entity entity, Game game,
-                boolean useValidNonInfantryCheck) {
+                                     boolean useValidNonInfantryCheck) {
             final boolean oldDone = entity.done;
             entity.done = false;
-            final boolean result = 
+            final boolean result =
                     super.isValidEntity(entity, game, useValidNonInfantryCheck);
             entity.done = oldDone;
             return result;
@@ -312,8 +312,8 @@ public class GameTurn implements Serializable {
             return entity.isAirborne() ? CLASS_DROPSHIP : CLASS_TANK;
         } else if ((entity instanceof SmallCraft) && entity.isAirborne()) {
             return CLASS_SMALL_CRAFT;
-        // Anything else that's still airborne is treated as an Aero 
-        // (VTOLs aren't considered airborne, since it's based on altitude and not elevation)
+            // Anything else that's still airborne is treated as an Aero
+            // (VTOLs aren't considered airborne, since it's based on altitude and not elevation)
         } else if (entity.isAirborne()) {
             return CLASS_AERO;
         } else if (entity instanceof Infantry) {
@@ -375,7 +375,7 @@ public class GameTurn implements Serializable {
         public boolean isValidClass(int classCode) {
             return (classCode & mask) != 0;
         }
-        
+
         /**
          * Get the class code of this turn
          * @return the classcode of this turn
@@ -383,7 +383,7 @@ public class GameTurn implements Serializable {
         public int getTurnCode() {
             return mask;
         }
-        
+
         @Override
         public String toString() {
             return super.toString() + " mask: " + mask;
@@ -530,7 +530,164 @@ public class GameTurn implements Serializable {
             for (int index = 0; (index < entityIds.length) && !retVal; index++) {
                 if ((game.getEntity(entityIds[index]) != null)
                         && (playerId == game.getEntity(entityIds[index])
-                                .getOwnerId())) {
+                        .getOwnerId())) {
+                    retVal = true;
+                }
+            }
+            return retVal;
+        }
+
+        @Override
+        public String toString() {
+            return super.toString() + ", entity IDs: [" + Arrays.toString(entityIds) + "]";
+        }
+
+        public int[] getEntityIds() {
+            return entityIds;
+        }
+    }
+
+    /**
+     * A type of game turn that indicates that one or more players should be
+     * given the opportunity to unload entities that are stranded on immobile
+     * transports. Each player declares which stranded units they will unload at
+     * the beginning of the movement phase, without being told what stranded
+     * units their opponent(s) are unloading. <p/> According to <a
+     * href="http://www.classicbattletech.com/w3t/showflat.php?Cat=&Board=ask&Number=555466&page=2&view=collapsed&sb=5&o=0&fpart=">
+     * Randall Bills</a>, the "minimum move" rule allow stranded units to
+     * dismount at the start of the turn.
+     */
+    public static class UnhideHiddenTurn extends GameTurn {
+        /**
+         *
+         */
+        private static final long serialVersionUID = 2403095752478007872L;
+        private int[] entityIds = null;
+
+        /**
+         * Any player that owns an entity whose ID is in the passed array should
+         * be given a chance to unload it.
+         *
+         * @param ids the array of <code>int</code> IDs of stranded entities.
+         *            This value must not be <code>null</code> or empty.
+         * @exception <code>IllegalArgumentException</code> if a
+         *                <code>null</code> or empty value is passed for ids.
+         */
+        public UnhideHiddenTurn(int[] ids) {
+            super(Player.PLAYER_NONE);
+
+            // Validate input.
+            if (null == ids) {
+                throw new IllegalArgumentException("the passed array of ids is null");
+            }
+
+            if (0 == ids.length) {
+                throw new IllegalArgumentException("the passed array of ids is empty");
+            }
+
+            // Create a copy of the array to prevent any post-call shenanigans.
+            entityIds = new int[ids.length];
+            System.arraycopy(ids, 0, entityIds, 0, ids.length);
+        }
+
+        /**
+         * Any player that owns an entity in the passed enumeration should be
+         * given a chance to unload it.
+         *
+         * @param entities the <code>Enumeration</code> of stranded entities.
+         *            This value must not be <code>null</code> or empty.
+         * @exception <code>IllegalArgumentException</code> if a
+         *                <code>null</code> or empty value is passed for
+         *                entities.
+         */
+        public UnhideHiddenTurn(Iterator<Entity> entities) {
+            super(Player.PLAYER_NONE);
+
+            // Validate input.
+            if (null == entities) {
+                throw new IllegalArgumentException("the passed enumeration of entities is null");
+            }
+            if (!entities.hasNext()) {
+                throw new IllegalArgumentException("the passed enumeration of entities is empty");
+            }
+
+            // Get the first entity.
+            Entity entity = entities.next();
+
+            // Do we need to get more entities?
+            if (entities.hasNext()) {
+                // It's a bit of a hack, but get the Game from the first
+                // entity, and create a temporary array that can hold the
+                // IDs of every entity in the game.
+                int[] ids = new int[entity.game.getNoOfEntities()];
+                int length = 0;
+
+                // Store the first entity's ID.
+                ids[length++] = entity.getId();
+
+                // Walk the list of remaining stranded entities.
+                while (entities.hasNext()) {
+                    ids[length++] = entities.next().getId();
+                }
+
+                // Create an array that just holds the stranded entity ids.
+                entityIds = new int[length];
+                System.arraycopy(ids, 0, entityIds, 0, length);
+
+            } // End have-more-stranded-entities
+            else {
+                // There was only one stranded entity.
+                entityIds = new int[1];
+                entityIds[0] = entity.getId();
+            }
+        }
+
+        /**
+         * Determine if the given entity is a valid one to use for this turn.
+         *
+         * @param entity the <code>Entity</code> being tested for the move.
+         * @param game the <code>Game</code> the entity belongs to
+         * @return <code>true</code> if the entity can be moved.
+         */
+        @Override
+        public boolean isValidEntity(Entity entity, Game game) {
+            boolean retVal = false;
+            // Null entities don't need to be checked.
+            if (null != entity) {
+
+                // Any entity in the array is valid.
+                // N.B. Stop looking after we've found the match.
+                final int entityId = entity.getId();
+                for (int index = 0; (index < entityIds.length) && !retVal; index++) {
+                    if (entityId == entityIds[index]) {
+                        retVal = true;
+                        break;
+                    }
+                }
+
+            } // End entity-isn't-null
+
+            return retVal;
+        }
+
+        /**
+         * Returns true if the player and entity are both valid.
+         */
+        @Override
+        public boolean isValid(final int playerId, final @Nullable Entity entity, final Game game) {
+            return isValidEntity(entity, game) && (entity.getOwnerId() == playerId);
+        }
+
+        /**
+         * Returns true if the player is valid.
+         */
+        @Override
+        public boolean isValid(int playerId, Game game) {
+            boolean retVal = false;
+            for (int index = 0; (index < entityIds.length) && !retVal; index++) {
+                if ((game.getEntity(entityIds[index]) != null)
+                        && (playerId == game.getEntity(entityIds[index])
+                        .getOwnerId())) {
                     retVal = true;
                 }
             }
@@ -574,8 +731,8 @@ public class GameTurn implements Serializable {
          */
         @Override
         public boolean isValidEntity(Entity entity, Game game,
-                boolean useValidNonInfantryCheck) {
-            return (super.isValidEntity(entity, game, useValidNonInfantryCheck) 
+                                     boolean useValidNonInfantryCheck) {
+            return (super.isValidEntity(entity, game, useValidNonInfantryCheck)
                     && (unitNumber == entity.getUnitNumber()));
         }
     }

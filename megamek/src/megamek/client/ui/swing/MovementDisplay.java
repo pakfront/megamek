@@ -981,7 +981,7 @@ public class MovementDisplay extends StatusBarPhaseDisplay {
      */
     private synchronized void endMyTurn() {
         final Entity ce = ce();
-
+        
         //get rid of still running timer, if turn is concluded before time is up
         if (tt != null) {
             tt.stopTimer();
@@ -4298,9 +4298,12 @@ public class MovementDisplay extends StatusBarPhaseDisplay {
         }
 
         if (clientgui.getClient().isMyTurn()) {
+
             // Can the player unload entities stranded on immobile transports?
             if (clientgui.getClient().canUnloadStranded()) {
                 unloadStranded();
+            } else if (clientgui.getClient().canUnhideHidden()) {
+                unhideHidden();
             } else if (cen == Entity.NONE) {
                 beginMyTurn();
             }
@@ -5347,6 +5350,73 @@ public class MovementDisplay extends StatusBarPhaseDisplay {
             }
         }
         clientgui.getClient().sendUnloadStranded(ids);
+    }
+
+    /**
+     * Give the player the opportunity to unload all entities that are stranded
+     * on immobile transports.
+     * <p/>
+     * According to <a href= "http://www.classicbattletech.com/w3t/showflat
+     * .php?Cat=&Board=ask&Number=555466&page=2&view=collapsed&sb=5&o=0&fpart="
+     * > Randall Bills</a>, the "minimum move" rule allow stranded units to
+     * dismount at the start of the turn.
+     */
+    private void unhideHidden() {
+        Vector<Entity> stranded = new Vector<>();
+        String[] names = null;
+        Entity entity = null;
+        Entity transport = null;
+
+        // Let the player know what's going on.
+        setStatusBarText(Messages.getString("MovementDisplay.AllPlayersUnload"));
+
+        // Collect the stranded entities into the vector.
+        Iterator<Entity> entities = clientgui.getClient().getSelectedEntities(
+                new EntitySelector() {
+                    private final Game game = clientgui.getClient().getGame();
+                    private final GameTurn turn = clientgui.getClient().getGame().getTurn();
+                    private final int ownerId = clientgui.getClient().getLocalPlayer().getId();
+
+                    @Override
+                    public boolean accept(Entity acc) {
+                        return turn.isValid(ownerId, acc, game);
+                    }
+                });
+        while (entities.hasNext()) {
+            stranded.addElement(entities.next());
+        }
+
+        // Construct an array of stranded entity names
+        names = new String[stranded.size()];
+        for (int index = 0; index < names.length; index++) {
+            entity = stranded.elementAt(index);
+            String buffer;
+
+            buffer = entity.getDisplayName();
+
+            names[index] = buffer;
+        }
+
+        // Show the choices to the player
+        int[] indexes = clientgui.doChoiceDialog(
+                "MovementDisplay.UnhideHiddenUnitsDialog.title",
+                "MovementDisplay.UnhideHiddenUnitsDialog.message",
+//                Messages.getString("MovementDisplay.UnloadStrandedUnitsDialog.title"),
+//                Messages.getString("MovementDisplay.UnloadStrandedUnitsDialog.message"),
+                names);
+
+        // Convert the indexes into selected entity IDs and tell the server.
+        int[] ids = null;
+        if (null != indexes) {
+            ids = new int[indexes.length];
+            for (int index = 0; index < indexes.length; index++) {
+                entity = stranded.elementAt(index);
+                ids[index] = entity.getId();
+            }
+        }
+//        clientgui.getClient().sendUnloadStranded(ids);
+        clientgui.getClient().sendUnhideHidden(ids);
+
     }
 
     // board view listener

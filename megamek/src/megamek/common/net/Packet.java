@@ -145,6 +145,9 @@ public class Packet {
     
     public static final int COMMAND_GAME_VICTORY_EVENT = 800;
 
+    public static final int COMMAND_UNHIDE_HIDDEN = 810;
+
+
     private int command;
 
     private Object[] data;
